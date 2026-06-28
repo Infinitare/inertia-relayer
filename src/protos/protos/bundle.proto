@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+import "packet.proto";
+import "shared.proto";
+
+package bundle;
+
+message Bundle {
+    shared.Header header = 2;
+    repeated packet.Packet packets = 3;
+}
+
+message BundleUuid {
+    bundle.Bundle bundle = 1;
+    string uuid = 2;
+}
+
+// Indicates the bundle's bid was high enough to win its state auction.
+// However, not high enough relative to other state auction winners and therefore excluded from being forwarded.
+message WinningBatchBidRejected {
+    // Auction's unique identifier.
+    string auction_id = 1;
+    // Bundle's simulated bid.
+    uint64 simulated_bid_lamports = 2;
+    optional string msg = 3;
+}
+
+// Indicates the bundle's bid was __not__ high enough to be included in its state auction's set of winners.
+message StateAuctionBidRejected {
+    // Auction's unique identifier.
+    string auction_id = 1;
+    // Bundle's simulated bid.
+    uint64 simulated_bid_lamports = 2;
+    optional string msg = 3;
+}
+
+// Bundle dropped due to simulation failure.
+message SimulationFailure {
+    // Signature of the offending transaction.
+    string tx_signature = 1;
+    optional string msg = 2;
+}

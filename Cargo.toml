@@ -1,0 +1,47 @@
+[package]
+name = "inertia-relayer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.45", features = ["derive", "env"] }
+tokio = { version = "1.47.1", features = ["full"] }
+agave-validator = "4.0.0"
+agave-banking-stage-ingress-types = "4.0.0"
+solana-sdk = "4.0.0"
+solana-core = "4.0.0"
+solana-perf = "4.0.0"
+solana-net-utils = "4.0.0"
+solana-rpc-client = "4.0.0"
+solana-pubsub-client = "4.0.0"
+solana-streamer = "4.0.0"
+log = "0.4.33"
+env_logger = "0.11.10"
+simplelog = "0.12.2"
+serde = { version = "1.0.160", features = ["derive"] }
+serde_yaml = "0.9.33"
+crossbeam-channel = "0.5.15"
+rayon = "1.12.0"
+tokio-util = "0.7.18"
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+jwt = { version = "0.16.0", features = ["openssl"] }
+openssl = "0.10.73"
+tonic = { version = "0.14.6", features = ["tls-ring", "tls-native-roots", "tls-webpki-roots"] }
+tonic-prost = "0.14.6"
+prost-types = "0.14.4"
+prost = "0.14.4"
+chrono = "0.4.45"
+ed25519-dalek = "1.0.1"
+rand = "0.8.5"
+keyed_priority_queue = "0.4.2"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14.5"
+protobuf-src = "1.1.0"
+
+[profile.release]
+codegen-units = 1
+opt-level = 3
+lto = "fat"
