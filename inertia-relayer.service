@@ -1,5 +1,5 @@
 [Unit]
-Description=Inertia Server
+Description=Inertia Relayer
 After=network-online.target
 Wants=network-online.target
 

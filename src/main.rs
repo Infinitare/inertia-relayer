@@ -125,7 +125,7 @@ fn main() {
             .unwrap();
 
         if let Err(e) = WriteLogger::init(
-            LevelFilter::Info,
+            LevelFilter::Debug, // Debug for now
             Config::default(),
             log_file,
         ) {
