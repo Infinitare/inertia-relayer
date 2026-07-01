@@ -1,0 +1,24 @@
+[Unit]
+Description=Inertia Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+
+ExecStart=/etc/inertia-relayer/inertia-relayer \
+    --keypair-path /etc/inertia-relayer/keypair.json \
+    --signing-key-pem-path /etc/inertia-relayer/signing-key.pem \
+    --verifying-key-pem-path /etc/inertia-relayer/verifying-key.pem \
+    --blockengine-url https://amsterdam.mainnet.block-engine.jito.wtf \
+    --inertia-server INERTIA_IP:PORT \
+    --inertia-cert-sha256 INERTIA_CERT_SHA256_64_HEX
+
+Restart=always
+RestartSec=2
+
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
