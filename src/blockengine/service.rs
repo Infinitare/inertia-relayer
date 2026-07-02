@@ -274,8 +274,13 @@ impl BlockEngineValidator for BlockengineService {
         let peer = req.remote_addr();
         info!("Received get_block_builder_fee_info request from: {:?}", peer);
 
-        let mut upstream = self.get_block_engine_client(peer).await?;
-        upstream.get_block_builder_fee_info(req).await
+        let res = {
+            let mut upstream = self.get_block_engine_client(peer).await?;
+            upstream.get_block_builder_fee_info(req).await
+        };
+
+        info!("get_block_builder_fee_info response: {:?}", res);
+        res
     }
 
     async fn get_block_engine_endpoints(
@@ -283,24 +288,29 @@ impl BlockEngineValidator for BlockengineService {
         req: Request<GetBlockEngineEndpointRequest>,
     ) -> Result<Response<GetBlockEngineEndpointResponse>, Status> {
         let peer = req.remote_addr();
-        info!("Received get_block_builder_fee_info request from: {:?}", peer);
+        info!("Received get_block_engine_endpoints request from: {:?}", peer);
         let mut upstream = self.get_block_engine_client(peer).await?;
 
-        let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
-        let res = GetBlockEngineEndpointResponse {
-            global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
-                block_engine_url: self.local_blockengine_url.clone(),
-                shredstream_receiver_address: global.shredstream_receiver_address,
-            }),
-            regioned_endpoints: jito_res.regioned_endpoints.iter().map(|endpoint| {
-                BlockEngineEndpoint {
+        let res = {
+            let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
+            let res = GetBlockEngineEndpointResponse {
+                global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
                     block_engine_url: self.local_blockengine_url.clone(),
-                    shredstream_receiver_address: endpoint.shredstream_receiver_address.clone(),
-                }
-            }).collect(),
+                    shredstream_receiver_address: global.shredstream_receiver_address,
+                }),
+                regioned_endpoints: jito_res.regioned_endpoints.iter().map(|endpoint| {
+                    BlockEngineEndpoint {
+                        block_engine_url: self.local_blockengine_url.clone(),
+                        shredstream_receiver_address: endpoint.shredstream_receiver_address.clone(),
+                    }
+                }).collect(),
+            };
+
+            Ok(Response::new(res))
         };
 
-        Ok(Response::new(res))
+        info!("get_block_engine_endpoints response: {:?}", res);
+        res
     }
 }
 
