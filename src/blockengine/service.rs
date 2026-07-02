@@ -289,9 +289,9 @@ impl BlockEngineValidator for BlockengineService {
     ) -> Result<Response<GetBlockEngineEndpointResponse>, Status> {
         let peer = req.remote_addr();
         info!("Received get_block_engine_endpoints request from: {:?}", peer);
-        let mut upstream = self.get_block_engine_client(peer).await?;
-
         let res = {
+            let mut upstream = self.get_block_engine_client(peer).await?;
+
             let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
             let res = GetBlockEngineEndpointResponse {
                 global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
