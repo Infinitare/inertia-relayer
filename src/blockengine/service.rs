@@ -80,21 +80,31 @@ impl BlockengineService {
         C: Clone,
         F: FnOnce(Channel) -> C,
     {
+        info!("1.1");
         if let Some(addr) = peer {
+            info!("1.2");
             let pool = pool.read().unwrap();
+            info!("1.3");
             if let Some(existing) = pool.get(&addr) {
+                info!("1.4");
                 return Ok(existing.clone());
             }
         }
 
+        info!("1.5");
         let channel = self.get_client().await?;
+        info!("1.6");
         let client = make(channel);
 
+        info!("1.7");
         if let Some(addr) = peer {
             info!("Adding client to {pool_name} pool: {addr}");
+
+            info!("1.8");
             pool.write().unwrap().insert(addr, client.clone());
         }
 
+        info!("1.9");
         Ok(client)
     }
 
