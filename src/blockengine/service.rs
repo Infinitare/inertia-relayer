@@ -14,7 +14,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tonic::codegen::BoxStream;
-use tonic::transport::{Channel, Endpoint};
+use std::time::Duration;
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Request, Response, Status, Streaming};
 use crate::protos::auth::auth_service_client::AuthServiceClient;
 use crate::protos::auth::auth_service_server::AuthService;
@@ -62,6 +63,9 @@ impl BlockengineService {
     ) -> Result<Channel, Status> {
         let channel = Endpoint::from_shared(self.blockengine_url.clone())
             .map_err(|e| Status::internal(e.to_string()))?
+            .tls_config(ClientTlsConfig::new().with_enabled_roots())
+            .map_err(|e| Status::internal(e.to_string()))?
+            .connect_timeout(Duration::from_secs(10))
             .connect()
             .await
             .map_err(|e| Status::unavailable(e.to_string()))?;
