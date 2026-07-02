@@ -84,31 +84,21 @@ impl BlockengineService {
         C: Clone,
         F: FnOnce(Channel) -> C,
     {
-        info!("1.1");
         if let Some(addr) = peer {
-            info!("1.2");
             let pool = pool.read().unwrap();
-            info!("1.3");
             if let Some(existing) = pool.get(&addr) {
-                info!("1.4");
                 return Ok(existing.clone());
             }
         }
 
-        info!("1.5");
         let channel = self.get_client().await?;
-        info!("1.6");
         let client = make(channel);
 
-        info!("1.7");
         if let Some(addr) = peer {
             info!("Adding client to {pool_name} pool: {addr}");
-
-            info!("1.8");
             pool.write().unwrap().insert(addr, client.clone());
         }
 
-        info!("1.9");
         Ok(client)
     }
 
@@ -288,13 +278,8 @@ impl BlockEngineValidator for BlockengineService {
         let peer = req.remote_addr();
         info!("Received get_block_builder_fee_info request from: {:?}", peer);
 
-        let res = {
-            let mut upstream = self.get_block_engine_client(peer).await?;
-            upstream.get_block_builder_fee_info(req).await
-        };
-
-        info!("get_block_builder_fee_info response: {:?}", res);
-        res
+        let mut upstream = self.get_block_engine_client(peer).await?;
+        upstream.get_block_builder_fee_info(req).await
     }
 
     async fn get_block_engine_endpoints(
@@ -303,31 +288,24 @@ impl BlockEngineValidator for BlockengineService {
     ) -> Result<Response<GetBlockEngineEndpointResponse>, Status> {
         let peer = req.remote_addr();
         info!("Received get_block_engine_endpoints request from: {:?}", peer);
-        let res = {
-            info!("1");
-            let mut upstream = self.get_block_engine_client(peer).await?;
-            info!("2");
 
-            let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
-            info!("3");
-            let res = GetBlockEngineEndpointResponse {
-                global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
+        let mut upstream = self.get_block_engine_client(peer).await?;
+        let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
+
+        let res = GetBlockEngineEndpointResponse {
+            global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
+                block_engine_url: self.local_blockengine_url.clone(),
+                shredstream_receiver_address: global.shredstream_receiver_address,
+            }),
+            regioned_endpoints: jito_res.regioned_endpoints.iter().map(|endpoint| {
+                BlockEngineEndpoint {
                     block_engine_url: self.local_blockengine_url.clone(),
-                    shredstream_receiver_address: global.shredstream_receiver_address,
-                }),
-                regioned_endpoints: jito_res.regioned_endpoints.iter().map(|endpoint| {
-                    BlockEngineEndpoint {
-                        block_engine_url: self.local_blockengine_url.clone(),
-                        shredstream_receiver_address: endpoint.shredstream_receiver_address.clone(),
-                    }
-                }).collect(),
-            };
-
-            Ok(Response::new(res))
+                    shredstream_receiver_address: endpoint.shredstream_receiver_address.clone(),
+                }
+            }).collect(),
         };
 
-        info!("get_block_engine_endpoints response: {:?}", res);
-        res
+        Ok(Response::new(res))
     }
 }
 
