@@ -317,6 +317,7 @@ impl AuthService for BlockengineService {
     ) -> Result<Response<GenerateAuthChallengeResponse>, Status> {
         let peer = req.remote_addr();
         info!("Received generate_auth_challenge request from: {:?}", peer);
+
         let mut upstream = self.get_auth_client(peer).await?;
         upstream.generate_auth_challenge(req).await
     }
@@ -327,7 +328,7 @@ impl AuthService for BlockengineService {
     ) -> Result<Response<GenerateAuthTokensResponse>, Status> {
         let peer = req.remote_addr();
         info!("Received generate_auth_tokens request from: {:?}", peer);
-        let peer = req.remote_addr();
+
         let mut upstream = self.get_auth_client(peer).await?;
         upstream.generate_auth_tokens(req).await
     }
@@ -338,6 +339,7 @@ impl AuthService for BlockengineService {
     ) -> Result<Response<RefreshAccessTokenResponse>, Status> {
         let peer = req.remote_addr();
         info!("Received refresh_access_token request from: {:?}", peer);
+
         let mut upstream = self.get_auth_client(peer).await?;
         upstream.refresh_access_token(req).await
     }
