@@ -290,9 +290,12 @@ impl BlockEngineValidator for BlockengineService {
         let peer = req.remote_addr();
         info!("Received get_block_engine_endpoints request from: {:?}", peer);
         let res = {
+            info!("1");
             let mut upstream = self.get_block_engine_client(peer).await?;
+            info!("2");
 
             let jito_res = upstream.get_block_engine_endpoints(req).await?.into_inner();
+            info!("3");
             let res = GetBlockEngineEndpointResponse {
                 global_endpoint: jito_res.global_endpoint.map(|global| BlockEngineEndpoint {
                     block_engine_url: self.local_blockengine_url.clone(),
