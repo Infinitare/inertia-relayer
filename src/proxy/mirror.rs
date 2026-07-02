@@ -16,6 +16,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::sync::{broadcast, watch};
 
 use crate::protos::block_engine::SubscribeBundlesResponse;
+use crate::proxy::Proxy;
 
 #[derive(Clone)]
 pub struct Mirror {
@@ -24,13 +25,17 @@ pub struct Mirror {
     inertia_server: SocketAddr,
     cert_pin: [u8; 32],
     conn: Arc<RwLock<Option<Connection>>>,
-    dropped: Arc<DropStats>,
+    stats: Arc<MirrorStats>,
 }
 
 #[derive(Default)]
-struct DropStats {
-    oversized: AtomicU64,
-    other: AtomicU64,
+struct MirrorStats {
+    tpu_packets_sent: AtomicU64,
+    be_packets_sent: AtomicU64,
+    bundles_sent: AtomicU64,
+    bundles_received: AtomicU64,
+    dropped_oversized: AtomicU64,
+    dropped_other: AtomicU64,
 }
 
 thread_local! {
@@ -42,7 +47,7 @@ impl Mirror {
     pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
     pub const BACKOFF_INITIAL: Duration = Duration::from_millis(250);
     pub const BACKOFF_MAX: Duration = Duration::from_secs(5);
-    pub const DROP_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+    pub const STATS_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
     pub const MAX_BUNDLE_FRAME: usize = 4 * 1024 * 1024;
     pub const DATAGRAM_SEND_BUFFER: usize = 4 * 1024 * 1024;
@@ -62,7 +67,7 @@ impl Mirror {
             cert_pin,
             shutdown,
             conn: Arc::new(RwLock::new(None)),
-            dropped: Arc::new(DropStats::default()),
+            stats: Arc::new(MirrorStats::default()),
         }
     }
 
@@ -81,12 +86,19 @@ impl Mirror {
             buf.split().freeze()
         });
         match conn.send_datagram(frame) {
-            Ok(()) => {}
+            Ok(()) => {
+                let sent = if source == Proxy::SOURCE_RELAYER {
+                    &self.stats.tpu_packets_sent
+                } else {
+                    &self.stats.be_packets_sent
+                };
+                sent.fetch_add(1, Ordering::Relaxed);
+            }
             Err(SendDatagramError::TooLarge) => {
-                self.dropped.oversized.fetch_add(1, Ordering::Relaxed);
+                self.stats.dropped_oversized.fetch_add(1, Ordering::Relaxed);
             }
             Err(_) => {
-                self.dropped.other.fetch_add(1, Ordering::Relaxed);
+                self.stats.dropped_other.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -108,7 +120,7 @@ impl Mirror {
             }
         };
 
-        let reporter = tokio::spawn(report_drops(self.dropped.clone(), self.shutdown.clone()));
+        let reporter = tokio::spawn(report_stats(self.stats.clone(), self.shutdown.clone()));
 
         let mut backoff = Self::BACKOFF_INITIAL;
         while !*self.shutdown.borrow() {
@@ -202,6 +214,9 @@ impl Mirror {
                         {
                             return;
                         }
+                        self.stats
+                            .bundles_sent
+                            .fetch_add(resp.bundles.len() as u64, Ordering::Relaxed);
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Mirror: bundle mirror receiver lagged, dropped {n}");
@@ -226,7 +241,12 @@ impl Mirror {
                 _ = self.wait_for_shutdown() => return,
                 accepted = conn.accept_uni() => match accepted {
                     Ok(recv) => {
-                        tokio::spawn(read_bundle_stream(recv, out.clone(), self.shutdown.clone()));
+                        tokio::spawn(read_bundle_stream(
+                            recv,
+                            out.clone(),
+                            self.stats.clone(),
+                            self.shutdown.clone(),
+                        ));
                     }
                     Err(e) => {
                         warn!("Mirror: bundle stream ended: {e}");
@@ -283,18 +303,27 @@ impl Mirror {
     }
 }
 
-async fn report_drops(stats: Arc<DropStats>, mut shutdown: watch::Receiver<bool>) {
-    let mut tick = tokio::time::interval(Mirror::DROP_REPORT_INTERVAL);
+async fn report_stats(stats: Arc<MirrorStats>, mut shutdown: watch::Receiver<bool>) {
+    let mut tick = tokio::time::interval(Mirror::STATS_REPORT_INTERVAL);
     loop {
         tokio::select! {
             _ = shutdown.changed() => break,
             _ = tick.tick() => {
-                let oversized = stats.oversized.swap(0, Ordering::Relaxed);
-                let other = stats.other.swap(0, Ordering::Relaxed);
+                let secs = Mirror::STATS_REPORT_INTERVAL.as_secs();
+                let tpu_packets = stats.tpu_packets_sent.swap(0, Ordering::Relaxed);
+                let be_packets = stats.be_packets_sent.swap(0, Ordering::Relaxed);
+                let bundles_sent = stats.bundles_sent.swap(0, Ordering::Relaxed);
+                let bundles_received = stats.bundles_received.swap(0, Ordering::Relaxed);
+                if tpu_packets > 0 || be_packets > 0 || bundles_sent > 0 || bundles_received > 0 {
+                    info!(
+                        "Mirror: last {secs}s: sent {tpu_packets} tpu packets, {be_packets} block engine packets, {bundles_sent} bundles; received {bundles_received} bundles"
+                    );
+                }
+                let oversized = stats.dropped_oversized.swap(0, Ordering::Relaxed);
+                let other = stats.dropped_other.swap(0, Ordering::Relaxed);
                 if oversized > 0 || other > 0 {
                     warn!(
-                        "Mirror: dropped datagrams in last {}s: {oversized} oversized (too large), {other} other",
-                        Mirror::DROP_REPORT_INTERVAL.as_secs()
+                        "Mirror: dropped datagrams in last {secs}s: {oversized} oversized (too large), {other} other"
                     );
                 }
             }
@@ -305,6 +334,7 @@ async fn report_drops(stats: Arc<DropStats>, mut shutdown: watch::Receiver<bool>
 async fn read_bundle_stream(
     mut recv: RecvStream,
     out: broadcast::Sender<SubscribeBundlesResponse>,
+    stats: Arc<MirrorStats>,
     shutdown: watch::Receiver<bool>,
 ) {
     let mut len_buf = [0u8; 4];
@@ -324,6 +354,9 @@ async fn read_bundle_stream(
         }
         match SubscribeBundlesResponse::decode(buf.as_slice()) {
             Ok(resp) => {
+                stats
+                    .bundles_received
+                    .fetch_add(resp.bundles.len() as u64, Ordering::Relaxed);
                 let _ = out.send(resp);
             }
             Err(e) => warn!("Mirror: failed to decode bundle frame: {e}"),
