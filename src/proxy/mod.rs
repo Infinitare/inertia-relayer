@@ -24,7 +24,7 @@ impl Proxy {
     const IDLE_TICK: Duration = Duration::from_millis(100);
     pub const SOURCE_RELAYER: u8 = 0;
     pub const SOURCE_BLOCKENGINE: u8 = 1;
-    pub const PACKET_DELAY: Duration = Duration::from_millis(50);
+    pub const PACKET_DELAY: Duration = Duration::from_millis(100);
 
     pub fn new(
         relayer: Relayer,
