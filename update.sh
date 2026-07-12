@@ -1,3 +1,4 @@
+#!/bin/bash
 git pull
 cargo build --release
 sudo systemctl stop inertia-relayer
