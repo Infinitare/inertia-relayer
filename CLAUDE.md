@@ -25,7 +25,7 @@ cargo clippy
 - **`.cargo/config.toml` sets `--cfg tokio_unstable`** — required for `Builder::disable_lifo_slot()` in `main.rs`. Don't remove it.
 - There are currently **no tests** in the repo (`cargo test` compiles and runs nothing meaningful).
 
-Running requires keypair + JWT PEM keypair + upstream addresses. All CLI args are also env-backed (clap `env` feature), so any `--foo-bar` flag can be set via `FOO_BAR`:
+Running requires keypair + JWT PEM keypair + upstream addresses. The JWT keypair is **auto-generated on first run**: if the `--signing-key-pem-path` / `--verifying-key-pem-path` files don't exist, `Relayer::new` (`relayer/mod.rs`, `load_or_generate_keys`) creates a fresh RSA-2048 pair, writes them to those paths (private key `chmod 0600`), and derives the public key from the private one — no `openssl` step needed. Existing files are used as-is. The process needs write access to the key directory on that first run. All CLI args are also env-backed (clap `env` feature), so any `--foo-bar` flag can be set via `FOO_BAR`:
 
 ```bash
 cargo run --release -- \
