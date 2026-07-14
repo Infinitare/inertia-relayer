@@ -30,11 +30,11 @@ struct Args {
     keypair_path: PathBuf,
 
     /// The private key used to sign tokens to authenticate the Relayer
-    #[arg(long, env)]
+    #[arg(long, env, default_value = "/etc/inertia-relayer/signing-key.pem")]
     signing_key_pem_path: PathBuf,
 
     /// The public key used to verify tokens to authenticate the Relayer
-    #[arg(long, env)]
+    #[arg(long, env, default_value = "/etc/inertia-relayer/verifying-key.pem")]
     verifying_key_pem_path: PathBuf,
 
     /// Port for TPU QUIC packets
