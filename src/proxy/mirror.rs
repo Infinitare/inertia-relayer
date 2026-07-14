@@ -16,7 +16,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::sync::{broadcast, watch};
 
 use crate::protos::block_engine::SubscribeBundlesResponse;
-use crate::proxy::Proxy;
+use crate::proxy::{FilterSet, Proxy};
 
 #[derive(Clone)]
 pub struct Mirror {
@@ -25,6 +25,7 @@ pub struct Mirror {
     inertia_server: SocketAddr,
     cert_pin: [u8; 32],
     conn: Arc<RwLock<Option<Connection>>>,
+    filter_set: Arc<FilterSet>,
     stats: Arc<MirrorStats>,
 }
 
@@ -34,6 +35,7 @@ struct MirrorStats {
     be_packets_sent: AtomicU64,
     bundles_sent: AtomicU64,
     bundles_received: AtomicU64,
+    filters_received: AtomicU64,
     dropped_oversized: AtomicU64,
     dropped_other: AtomicU64,
 }
@@ -55,10 +57,13 @@ impl Mirror {
     pub const ALPN: &[u8] = b"inertia-mirror";
     pub const SERVER_NAME: &'static str = "inertia-relayer";
 
+    pub const FILTER_TAG: u8 = 0;
+
     pub fn new(
         proxy_server: SocketAddr,
         inertia_server: SocketAddr,
         cert_pin: [u8; 32],
+        filter_set: Arc<FilterSet>,
         shutdown: watch::Receiver<bool>,
     ) -> Self {
         Mirror {
@@ -67,6 +72,7 @@ impl Mirror {
             cert_pin,
             shutdown,
             conn: Arc::new(RwLock::new(None)),
+            filter_set,
             stats: Arc::new(MirrorStats::default()),
         }
     }
@@ -178,8 +184,36 @@ impl Mirror {
     ) {
         tokio::select! {
             _ = self.read_bundles(conn, out) => {}
+            _ = self.read_filters(conn) => {}
             _ = self.mirror_bundles_out(conn, bundle_mirror_in) => {}
         }
+    }
+
+    async fn read_filters(&self, conn: &Connection) {
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.wait_for_shutdown() => return,
+                datagram = conn.read_datagram() => match datagram {
+                    Ok(bytes) => self.ingest_filter(&bytes),
+                    Err(e) => {
+                        warn!("Mirror: filter datagram stream ended: {e}");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn ingest_filter(&self, bytes: &[u8]) {
+        let Some((&tag, signature)) = bytes.split_first() else { return };
+        if tag != Self::FILTER_TAG {
+            return;
+        }
+        
+        let Ok(signature) = <[u8; 64]>::try_from(signature) else { return };
+        self.filter_set.insert(signature);
+        self.stats.filters_received.fetch_add(1, Ordering::Relaxed);
     }
 
     async fn mirror_bundles_out(
@@ -314,9 +348,10 @@ async fn report_stats(stats: Arc<MirrorStats>, mut shutdown: watch::Receiver<boo
                 let be_packets = stats.be_packets_sent.swap(0, Ordering::Relaxed);
                 let bundles_sent = stats.bundles_sent.swap(0, Ordering::Relaxed);
                 let bundles_received = stats.bundles_received.swap(0, Ordering::Relaxed);
-                if tpu_packets > 0 || be_packets > 0 || bundles_sent > 0 || bundles_received > 0 {
+                let filters_received = stats.filters_received.swap(0, Ordering::Relaxed);
+                if tpu_packets > 0 || be_packets > 0 || bundles_sent > 0 || bundles_received > 0 || filters_received > 0 {
                     info!(
-                        "Mirror: last {secs}s: sent {tpu_packets} tpu packets, {be_packets} block engine packets, {bundles_sent} bundles; received {bundles_received} bundles"
+                        "Mirror: last {secs}s: sent {tpu_packets} tpu packets, {be_packets} block engine packets, {bundles_sent} bundles; received {bundles_received} bundles, {filters_received} filters"
                     );
                 }
                 let oversized = stats.dropped_oversized.swap(0, Ordering::Relaxed);

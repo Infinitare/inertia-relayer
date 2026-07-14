@@ -1,22 +1,59 @@
 mod mirror;
 
 use crate::blockengine::Blockengine;
-use crate::protos::block_engine::SubscribePacketsResponse;
+use crate::protos::block_engine::{SubscribeBundlesResponse, SubscribePacketsResponse};
 use crate::proxy::mirror::Mirror;
 use crate::proxy::mirror::parse_cert_pin;
 use crate::relayer::Relayer;
 use agave_banking_stage_ingress_types::BankingPacketBatch;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use log::warn;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::pending;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
+
+#[derive(Default)]
+pub struct FilterSet {
+    map: Mutex<HashMap<[u8; 64], Instant>>,
+    len: AtomicUsize,
+}
+
+impl FilterSet {
+    const TTL: Duration = Duration::from_secs(2);
+
+    pub fn insert(&self, signature: [u8; 64]) {
+        let mut map = self.map.lock().unwrap();
+        map.insert(signature, Instant::now());
+        self.len.store(map.len(), Ordering::Relaxed);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len.load(Ordering::Relaxed) == 0
+    }
+
+    fn locked(&self) -> MutexGuard<'_, HashMap<[u8; 64], Instant>> {
+        self.map.lock().unwrap()
+    }
+
+    fn sweep(&self) {
+        if self.is_empty() {
+            return;
+        }
+        let mut map = self.map.lock().unwrap();
+        map.retain(|_, at| at.elapsed() < Self::TTL);
+        self.len.store(map.len(), Ordering::Relaxed);
+    }
+}
+
+fn first_signature(data: &[u8]) -> Option<[u8; 64]> {
+    data.get(1..65)?.try_into().ok()
+}
 
 pub struct Proxy;
 
@@ -47,11 +84,13 @@ impl Proxy {
 
         let proxy_addr = SocketAddr::new(proxy_bind_ip, proxy_bind_port);
         let shutdown = shutdown_watch(exit.clone(), rt);
+        let filter_set = Arc::new(FilterSet::default());
 
         let mirror = Mirror::new(
             proxy_addr,
             inertia_server,
             cert_pin,
+            filter_set.clone(),
             shutdown.clone(),
         );
 
@@ -59,11 +98,13 @@ impl Proxy {
             tpu_receiver,
             forwarder_sender,
             mirror.clone(),
+            filter_set.clone(),
             Self::PACKET_DELAY,
             exit.clone(),
         );
 
         let packets_mirror = mirror.clone();
+        let packets_filter = filter_set.clone();
         let packets_join = rt.spawn(delay_forward(
             be_packet_in,
             be_packet_out,
@@ -71,8 +112,10 @@ impl Proxy {
             shutdown.clone(),
             "block-engine-packet",
             move |resp| mirror_be_packets(&packets_mirror, resp),
+            move |resp: SubscribePacketsResponse| filter_be_packets(&packets_filter, resp),
         ));
 
+        let bundles_filter = filter_set.clone();
         let bundles_join = rt.spawn(delay_forward(
             be_bundle_in,
             bundle_out.clone(),
@@ -80,6 +123,7 @@ impl Proxy {
             shutdown.clone(),
             "block-engine-bundle",
             |_| {},
+            move |resp: SubscribeBundlesResponse| filter_be_bundles(&bundles_filter, resp),
         ));
 
         let mirror_join = rt.spawn(async move {
@@ -100,6 +144,7 @@ fn spawn_relayer_delay(
     rx: Receiver<BankingPacketBatch>,
     tx: Sender<BankingPacketBatch>,
     mirror: Mirror,
+    filter_set: Arc<FilterSet>,
     delay: Duration,
     exit: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
@@ -123,16 +168,67 @@ fn spawn_relayer_delay(
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
 
+                filter_set.sweep();
+
                 let now = Instant::now();
                 while queue.front().is_some_and(|(release_at, _)| *release_at <= now) {
                     let (_, batch) = queue.pop_front().unwrap();
-                    if tx.send(batch).is_err() {
+                    if tx.send(discard_filtered(&filter_set, batch)).is_err() {
                         return;
                     }
                 }
             }
         })
         .expect("spawn proxy-relayer-delay thread")
+}
+
+fn discard_filtered(filter_set: &FilterSet, mut batch: BankingPacketBatch) -> BankingPacketBatch {
+    if filter_set.is_empty() {
+        return batch;
+    }
+
+    let blocked = filter_set.locked();
+    for packet_batch in Arc::make_mut(&mut batch).iter_mut() {
+        for mut packet in packet_batch.iter_mut() {
+            if packet.meta().discard() {
+                continue;
+            }
+            if packet.data(..).and_then(first_signature).is_some_and(|sig| blocked.contains_key(&sig)) {
+                packet.meta_mut().set_discard(true);
+            }
+        }
+    }
+
+    batch
+}
+
+fn filter_be_packets(filter_set: &FilterSet, mut resp: SubscribePacketsResponse) -> SubscribePacketsResponse {
+    if filter_set.is_empty() {
+        return resp;
+    }
+
+    if let Some(batch) = resp.batch.as_mut() {
+        let blocked = filter_set.locked();
+        batch.packets.retain(|p| first_signature(&p.data).is_none_or(|sig| !blocked.contains_key(&sig)));
+    }
+
+    resp
+}
+
+fn filter_be_bundles(filter_set: &FilterSet, mut resp: SubscribeBundlesResponse) -> SubscribeBundlesResponse {
+    if filter_set.is_empty() {
+        return resp;
+    }
+
+    let blocked = filter_set.locked();
+    resp.bundles.retain(|bu| {
+        let hit = bu.bundle.as_ref().is_some_and(|b| {
+            b.packets.iter().any(|p| first_signature(&p.data).is_some_and(|sig| blocked.contains_key(&sig)))
+        });
+        !hit
+    });
+
+    resp
 }
 
 fn mirror_banking_batch(mirror: &Mirror, batch: &BankingPacketBatch) {
@@ -157,16 +253,18 @@ fn shutdown_watch(exit: Arc<AtomicBool>, rt: &Handle) -> watch::Receiver<bool> {
     rx
 }
 
-async fn delay_forward<T, F>(
+async fn delay_forward<T, F, G>(
     mut rx: broadcast::Receiver<T>,
     tx: broadcast::Sender<T>,
     delay: Duration,
     mut shutdown: watch::Receiver<bool>,
     label: &'static str,
     on_receive: F,
+    on_release: G,
 ) where
     T: Clone + Send + 'static,
     F: Fn(&T) + Send + 'static,
+    G: Fn(T) -> T + Send + 'static,
 {
     let mut queue: VecDeque<(tokio::time::Instant, T)> = VecDeque::new();
 
@@ -186,7 +284,7 @@ async fn delay_forward<T, F>(
                 let now = tokio::time::Instant::now();
                 while queue.front().is_some_and(|(release_at, _)| *release_at <= now) {
                     let (_, resp) = queue.pop_front().unwrap();
-                    let _ = tx.send(resp);
+                    let _ = tx.send(on_release(resp));
                 }
             }
             received = rx.recv() => match received {
