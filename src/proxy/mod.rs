@@ -61,6 +61,7 @@ impl Proxy {
     const IDLE_TICK: Duration = Duration::from_millis(100);
     pub const SOURCE_RELAYER: u8 = 0;
     pub const SOURCE_BLOCKENGINE: u8 = 1;
+    pub const SOURCE_CONTROL: u8 = 2;
     pub const PACKET_DELAY: Duration = Duration::from_millis(100);
 
     pub fn new(
@@ -76,6 +77,7 @@ impl Proxy {
         let cert_pin = parse_cert_pin(&inertia_cert_sha256).expect("Invalid inertia certificate fingerprint (--inertia-cert-sha256)");
         let tpu_receiver = relayer.tpu_receiver();
         let forwarder_sender = relayer.forwarder_sender();
+        let connected_validator = relayer.connected_validator();
         let be_packet_in = blockengine.packet_from_blockengine().subscribe();
         let be_packet_out = blockengine.packet_from_proxy();
         let be_bundle_in = blockengine.bundle_from_blockengine().subscribe();
@@ -91,6 +93,7 @@ impl Proxy {
             inertia_server,
             cert_pin,
             filter_set.clone(),
+            connected_validator,
             shutdown.clone(),
         );
 

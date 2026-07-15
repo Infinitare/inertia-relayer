@@ -17,6 +17,7 @@ use tokio::sync::{broadcast, watch};
 
 use crate::protos::block_engine::SubscribeBundlesResponse;
 use crate::proxy::{FilterSet, Proxy};
+use crate::relayer::forwarder::ConnectedValidator;
 
 #[derive(Clone)]
 pub struct Mirror {
@@ -26,6 +27,7 @@ pub struct Mirror {
     cert_pin: [u8; 32],
     conn: Arc<RwLock<Option<Connection>>>,
     filter_set: Arc<FilterSet>,
+    validator: ConnectedValidator,
     stats: Arc<MirrorStats>,
 }
 
@@ -33,6 +35,7 @@ pub struct Mirror {
 struct MirrorStats {
     tpu_packets_sent: AtomicU64,
     be_packets_sent: AtomicU64,
+    control_sent: AtomicU64,
     bundles_sent: AtomicU64,
     bundles_received: AtomicU64,
     filters_received: AtomicU64,
@@ -58,12 +61,14 @@ impl Mirror {
     pub const SERVER_NAME: &'static str = "inertia-relayer";
 
     pub const FILTER_TAG: u8 = 0;
+    pub const CONTROL_INTERVAL: Duration = Duration::from_secs(1);
 
     pub fn new(
         proxy_server: SocketAddr,
         inertia_server: SocketAddr,
         cert_pin: [u8; 32],
         filter_set: Arc<FilterSet>,
+        validator: ConnectedValidator,
         shutdown: watch::Receiver<bool>,
     ) -> Self {
         Mirror {
@@ -73,6 +78,7 @@ impl Mirror {
             shutdown,
             conn: Arc::new(RwLock::new(None)),
             filter_set,
+            validator,
             stats: Arc::new(MirrorStats::default()),
         }
     }
@@ -93,10 +99,10 @@ impl Mirror {
         });
         match conn.send_datagram(frame) {
             Ok(()) => {
-                let sent = if source == Proxy::SOURCE_RELAYER {
-                    &self.stats.tpu_packets_sent
-                } else {
-                    &self.stats.be_packets_sent
+                let sent = match source {
+                    Proxy::SOURCE_RELAYER => &self.stats.tpu_packets_sent,
+                    Proxy::SOURCE_CONTROL => &self.stats.control_sent,
+                    _ => &self.stats.be_packets_sent,
                 };
                 sent.fetch_add(1, Ordering::Relaxed);
             }
@@ -186,6 +192,29 @@ impl Mirror {
             _ = self.read_bundles(conn, out) => {}
             _ = self.read_filters(conn) => {}
             _ = self.mirror_bundles_out(conn, bundle_mirror_in) => {}
+            _ = self.mirror_control() => {}
+        }
+    }
+
+    async fn mirror_control(&self) {
+        let mut tick = tokio::time::interval(Self::CONTROL_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let mut last = None;
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.wait_for_shutdown() => return,
+                _ = tick.tick() => {
+                    let Some(identity) = self.validator.get() else { continue };
+                    if last != Some(identity) {
+                        info!("Mirror: reporting connected validator {identity}");
+                        last = Some(identity);
+                    }
+
+                    self.send(Proxy::SOURCE_CONTROL, identity.as_ref());
+                }
+            }
         }
     }
 
@@ -346,12 +375,13 @@ async fn report_stats(stats: Arc<MirrorStats>, mut shutdown: watch::Receiver<boo
                 let secs = Mirror::STATS_REPORT_INTERVAL.as_secs();
                 let tpu_packets = stats.tpu_packets_sent.swap(0, Ordering::Relaxed);
                 let be_packets = stats.be_packets_sent.swap(0, Ordering::Relaxed);
+                let control_sent = stats.control_sent.swap(0, Ordering::Relaxed);
                 let bundles_sent = stats.bundles_sent.swap(0, Ordering::Relaxed);
                 let bundles_received = stats.bundles_received.swap(0, Ordering::Relaxed);
                 let filters_received = stats.filters_received.swap(0, Ordering::Relaxed);
                 if tpu_packets > 0 || be_packets > 0 || bundles_sent > 0 || bundles_received > 0 || filters_received > 0 {
                     info!(
-                        "Mirror: last {secs}s: sent {tpu_packets} tpu packets, {be_packets} block engine packets, {bundles_sent} bundles; received {bundles_received} bundles, {filters_received} filters"
+                        "Mirror: last {secs}s: sent {tpu_packets} tpu packets, {be_packets} block engine packets, {bundles_sent} bundles, {control_sent} control; received {bundles_received} bundles, {filters_received} filters"
                     );
                 }
                 let oversized = stats.dropped_oversized.swap(0, Ordering::Relaxed);

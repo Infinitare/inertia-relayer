@@ -34,8 +34,22 @@ use crate::relayer::auth::ValidatorAutherImpl;
 type PacketSubscriptions = Arc<RwLock<HashMap<Pubkey, TokioSender<Result<SubscribePacketsResponse, Status>>>>>;
 
 #[derive(Clone)]
+pub struct ConnectedValidator(PacketSubscriptions);
+
+impl ConnectedValidator {
+    pub fn get(&self) -> Option<Pubkey> {
+        let subscriptions = self.0.read().unwrap();
+        match subscriptions.len() {
+            1 => subscriptions.keys().next().copied(),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Forwarder {
-    sender: crossbeam_channel::Sender<BankingPacketBatch>
+    sender: crossbeam_channel::Sender<BankingPacketBatch>,
+    packet_subscriptions: PacketSubscriptions,
 }
 
 impl Forwarder {
@@ -52,6 +66,7 @@ impl Forwarder {
     ) -> (Self, JoinHandle<()>, std::thread::JoinHandle<()>) {
         let (delay_packet_sender, delay_packet_receiver) = crossbeam_channel::bounded(Tpu::TPU_QUEUE_CAPACITY);
         let forwarder_service = ForwarderService::new(public_ip, tpu_quic_port, tpu_fwd_quic_port);
+        let packet_subscriptions = forwarder_service.packet_subscriptions.clone();
 
         let auth_svc = AuthServiceImpl::new(
             ValidatorAutherImpl::default(),
@@ -93,7 +108,8 @@ impl Forwarder {
         });
 
         let forwarder = Forwarder {
-            sender: delay_packet_sender
+            sender: delay_packet_sender,
+            packet_subscriptions,
         };
 
         (forwarder, join, event_task)
@@ -101,6 +117,10 @@ impl Forwarder {
 
     pub fn sender(&self) -> crossbeam_channel::Sender<BankingPacketBatch> {
         self.sender.clone()
+    }
+
+    pub fn connected_validator(&self) -> ConnectedValidator {
+        ConnectedValidator(self.packet_subscriptions.clone())
     }
 }
 

@@ -1,8 +1,9 @@
+pub mod forwarder;
 mod tpu;
 mod staked_nodes_updater_service;
-mod forwarder;
 mod auth;
 
+use crate::relayer::forwarder::ConnectedValidator;
 use crate::relayer::forwarder::Forwarder;
 use crate::relayer::tpu::Tpu;
 use crate::rpc::Rpc;
@@ -99,6 +100,10 @@ impl Relayer {
 
     pub fn forwarder_sender(&self) -> crossbeam_channel::Sender<BankingPacketBatch> {
         self.forwarder.sender()
+    }
+
+    pub fn connected_validator(&self) -> ConnectedValidator {
+        self.forwarder.connected_validator()
     }
 }
 
