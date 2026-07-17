@@ -12,6 +12,7 @@ use std::sync::Arc;
 use agave_validator::admin_rpc_service::StakedNodesOverrides;
 use clap::Parser;
 use env_logger::Env;
+use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use log::{info, LevelFilter};
 use simplelog::{Config, WriteLogger};
 use solana_sdk::signature::{read_keypair_file, Signer};
@@ -118,11 +119,13 @@ fn main() {
             .format_timestamp_millis()
             .init();
     } else {
-        let log_file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&args.log_path)
-            .unwrap();
+        let log_file = FileRotate::new(
+            &args.log_path,
+            AppendCount::new(4),
+            ContentLimit::Bytes(100 * 1024 * 1024),
+            Compression::None,
+            None,
+        );
 
         if let Err(e) = WriteLogger::init(
             LevelFilter::Info,
