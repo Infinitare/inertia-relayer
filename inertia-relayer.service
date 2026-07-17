@@ -9,7 +9,7 @@ User=root
 
 ExecStart=/etc/inertia-relayer/inertia-relayer \
     --keypair-path /etc/inertia-relayer/keypair.json \
-    --blockengine-url https://amsterdam.mainnet.block-engine.jito.wtf \
+    --blockengine-url BLOCKENGINE_URL \
     --inertia-server INERTIA_IP:PORT \
     --inertia-cert-sha256 INERTIA_CERT_SHA256_64_HEX
 
